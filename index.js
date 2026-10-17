@@ -1,15 +1,19 @@
-const WebSocket = require('ws');
+const { Client } = require('topluyo-bot');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-// Token, Render Environment Variables (CLIENT_KEY) üzerinden çekilir.
+// Render Environment Variables'tan çekilir
 const CLIENT_KEY = process.env.CLIENT_KEY;
-const DAVET_LINKI = "https://topluyo.com/"; // Kendi sunucu/davet linkinizle değiştirin
+const DAVET_LINKI = "https://topluyo.com/"; // Kendi sunucu veya davet bağlantınız
 
 if (!CLIENT_KEY) {
-  console.error("HATA: CLIENT_KEY çevresel değişkeni bulunamadı! Lütfen Render panelinde tanımlayın.");
+  console.error("HATA: CLIENT_KEY çevresel değişkeni bulunamadı! Render panelinden tanımlayın.");
   process.exit(1);
 }
+
+const client = new Client({
+  token: CLIENT_KEY
+});
 
 // --- DUCKDUCKGO ARAMA FONKSİYONU ---
 async function duckDuckGoAra(query) {
@@ -25,7 +29,7 @@ async function duckDuckGoAra(query) {
     const results = [];
 
     $('.result').each((i, element) => {
-      if (i >= 5) return false; // En fazla 5 sonuç getir
+      if (i >= 5) return false; // En fazla 5 sonuç
       const a = $(element).find('.result__a');
       if (!a.length) return;
 
@@ -45,7 +49,7 @@ async function duckDuckGoAra(query) {
 
     return results;
   } catch (error) {
-    console.error('DDG Arama hatası:', error.message);
+    console.error('DDG Arama Hatası:', error.message);
     return [];
   }
 }
@@ -59,106 +63,92 @@ async function getWikipediaSummary(query) {
       return response.data.extract;
     }
   } catch (err) {
-    // Wikipedia'da eşleşen sayfa bulunamadığında hata verebilir, yutuyoruz
+    // Wikipedia sonuç bulamadığında oluşan hatayı yutuyoruz
   }
   return null;
 }
 
-// --- BOT MANTIĞI VE WEBSOCKET BAĞLANTISI ---
-function connectWebSocket() {
-  // Topluyo WebSocket veya API Endpoint adresi
-  const ws = new WebSocket(`wss://topluyo.com/ws?key=${CLIENT_KEY}`);
+// --- BOT OLAYLARI (EVENTS) ---
+client.on('ready', () => {
+  console.log(`Bot başarıyla bağlandı ve aktif!`);
+});
 
-  ws.on('open', () => {
-    console.log('Topluyo WebSocket bağlantısı başarıyla kuruldu.');
-  });
+client.on('message', async (message) => {
+  // Bot kendi mesajlarına yanıt vermesin
+  if (message.author && message.author.bot) return;
 
-  ws.on('message', async (data) => {
-    try {
-      const message = JSON.parse(data.toString());
+  const content = message.content || "";
+  if (!content.startsWith('!')) return;
 
-      // Mesaj içerik kontrolü (Topluyo API mesaj formatına göre ayarlayabilirsiniz)
-      const content = message.content || message.text || "";
-      const channelId = message.channel_id || message.channelId;
+  const args = content.slice(1).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
 
-      if (!content.startsWith('!')) return;
-
-      const args = content.slice(1).trim().split(/ +/);
-      const command = args.shift().toLowerCase();
-
-      // --- !yardim KOMUTU ---
-      if (command === 'yardim') {
-        const yardimMesaji = `🤖 **Bot Komutları:**\n` +
-          `• \`!ara <sorgu>\`: DuckDuckGo üzerinde arama yapar (Varsa Wikipedia özeti ekler).\n` +
-          `• \`!davet\`: Sunucumuza katılım linkini gönderir.\n` +
-          `• \`!yardim\`: Bu yardım menüsünü gösterir.`;
-        sendMessage(ws, channelId, yardimMesaji);
-      }
-
-      // --- !davet KOMUTU ---
-      else if (command === 'davet') {
-        sendMessage(ws, channelId, `🎉 Sunucumuza katılmak için link: ${DAVET_LINKI}`);
-      }
-
-      // --- !ara KOMUTU ---
-      else if (command === 'ara') {
-        const query = args.join(' ');
-        if (!query) {
-          sendMessage(ws, channelId, '⚠️ Lütfen aratmak istediğiniz kelimeyi girin. Örnek: `!ara Yazılım`');
-          return;
-        }
-
-        // Parallel aramalar
-        const [wikiSummary, searchResults] = await Promise.all([
-          getWikipediaSummary(query),
-          duckDuckGoAra(query)
-        ]);
-
-        let responseText = "";
-
-        // En üste Wikipedia özet bilgisi
-        if (wikiSummary) {
-          responseText += `📖 **Wikipedia Bilgisi:**\n${wikiSummary}\n\n---\n\n`;
-        }
-
-        // DuckDuckGo Arama Sonuçları
-        if (searchResults.length > 0) {
-          responseText += `🔍 **"${query}" İçin Arama Sonuçları:**\n\n`;
-          searchResults.forEach((item, idx) => {
-            responseText += `**${idx + 1}. [${item.title}](${item.link})**\n`;
-            if (item.snippet) responseText += `${item.snippet}\n`;
-            responseText += `\n`;
-          });
-        } else {
-          responseText += `❌ "${query}" için her hangi bir sonuç bulunamadı.`;
-        }
-
-        sendMessage(ws, channelId, responseText);
-      }
-
-    } catch (err) {
-      console.error('Mesaj işleme hatası:', err);
+  // --- !yardim KOMUTU ---
+  if (command === 'yardim') {
+    const yardimText = `🤖 **Bot Komutları:**\n` +
+      `• \`!ara <sorgu>\`: DuckDuckGo üzerinde arama yapar (Varsa Wikipedia özeti ekler).\n` +
+      `• \`!davet\`: Sunucumuza katılım linkini gönderir.\n` +
+      `• \`!yardim\`: Bu yardım menüsünü gösterir.`;
+    
+    if (typeof message.reply === 'function') {
+      message.reply(yardimText);
+    } else {
+      message.channel.send(yardimText);
     }
-  });
-
-  ws.on('close', () => {
-    console.log('Bağlantı koptu, 5 saniye sonra tekrar bağlanılıyor...');
-    setTimeout(connectWebSocket, 5000);
-  });
-
-  ws.on('error', (err) => {
-    console.error('WebSocket Hatası:', err.message);
-  });
-}
-
-function sendMessage(ws, channelId, content) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      action: 'send_message',
-      channel_id: channelId,
-      content: content
-    }));
   }
-}
 
-connectWebSocket();
+  // --- !davet KOMUTU ---
+  else if (command === 'davet') {
+    const davetText = `🎉 Sunucumuza katılmak için link: ${DAVET_LINKI}`;
+    if (typeof message.reply === 'function') {
+      message.reply(davetText);
+    } else {
+      message.channel.send(davetText);
+    }
+  }
+
+  // --- !ara KOMUTU ---
+  else if (command === 'ara') {
+    const query = args.join(' ');
+    if (!query) {
+      const uyarText = '⚠️ Lütfen aratmak istediğiniz kelimeyi girin. Örnek: `!ara Yazılım`';
+      if (typeof message.reply === 'function') message.reply(uyarText);
+      else message.channel.send(uyarText);
+      return;
+    }
+
+    // Wikipedia ve DuckDuckGo aramalarını paralel yürüt
+    const [wikiSummary, searchResults] = await Promise.all([
+      getWikipediaSummary(query),
+      duckDuckGoAra(query)
+    ]);
+
+    let responseText = "";
+
+    // Mesajın en üstüne varsa Wikipedia özeti
+    if (wikiSummary) {
+      responseText += `📖 **Wikipedia Bilgisi:**\n${wikiSummary}\n\n---\n\n`;
+    }
+
+    // DuckDuckGo Arama Sonuçları
+    if (searchResults.length > 0) {
+      responseText += `🔍 **"${query}" İçin Arama Sonuçları:**\n\n`;
+      searchResults.forEach((item, idx) => {
+        responseText += `**${idx + 1}. [${item.title}](${item.link})**\n`;
+        if (item.snippet) responseText += `${item.snippet}\n`;
+        responseText += `\n`;
+      });
+    } else {
+      responseText += `❌ "${query}" için herhangi bir sonuç bulunamadı.`;
+    }
+
+    if (typeof message.reply === 'function') {
+      message.reply(responseText);
+    } else {
+      message.channel.send(responseText);
+    }
+  }
+});
+
+// Botu başlat
+client.login(CLIENT_KEY);
